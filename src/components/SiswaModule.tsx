@@ -1,24 +1,14 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '../store/useAuthStore';
-import { Plus, Upload, FileText, Search, CheckCircle, Clock, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Upload, FileText, Search, CheckCircle, Clock, Pencil, Trash2, Loader2 } from 'lucide-react';
 import { Badge, BadgeTone } from './ui/Badge';
 import { Modal } from './ui/Modal';
 import { ConfirmDialog } from './ui/ConfirmDialog';
 import { PageHeader } from './ui/PageHeader';
 import { toast } from '../store/useToastStore';
-
-interface Siswa {
-  id: string;
-  nama: string;
-  nik: string;
-  sekolahAsal: string;
-  lpkPenyangga: string;
-  status: 'Pendaftaran' | 'Pelatihan' | 'Matching' | 'Berangkat';
-  pasporUploaded: boolean;
-  ijazahUploaded: boolean;
-}
+import { studentService, Siswa } from '../services/studentService';
 
 const STATUS_TONE: Record<Siswa['status'], BadgeTone> = {
   Pendaftaran: 'neutral',
@@ -26,13 +16,6 @@ const STATUS_TONE: Record<Siswa['status'], BadgeTone> = {
   Matching: 'warning',
   Berangkat: 'success',
 };
-
-const INITIAL_SISWA: Siswa[] = [
-  { id: '1', nama: 'Ahmad Rizky', nik: '3201123456780001', sekolahAsal: 'SMKN 1 Jakarta', lpkPenyangga: 'LPK Bina Karya', status: 'Pelatihan', pasporUploaded: true, ijazahUploaded: true },
-  { id: '2', nama: 'Siti Rahma', nik: '3201123456780002', sekolahAsal: 'SMK 2 Depok', lpkPenyangga: 'LPK Mitra Mandiri', status: 'Matching', pasporUploaded: true, ijazahUploaded: false },
-  { id: '3', nama: 'Budi Santoso', nik: '3201123456780003', sekolahAsal: 'SMKN 1 Bandung', lpkPenyangga: 'LPK Bina Karya', status: 'Berangkat', pasporUploaded: true, ijazahUploaded: true },
-  { id: '4', nama: 'Dewi Lestari', nik: '3201123456780004', sekolahAsal: 'SMK Taruna Karya', lpkPenyangga: 'LPK Sinar Nusantara', status: 'Pendaftaran', pasporUploaded: false, ijazahUploaded: false },
-];
 
 interface FormState {
   nama: string;
@@ -60,8 +43,29 @@ export const SiswaModule: React.FC = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'Semua' | Siswa['status']>('Semua');
 
-  const [siswaList, setSiswaList] = useState<Siswa[]>(INITIAL_SISWA);
+  // State Async & Data Real dari Database
+  const [siswaList, setSiswaList] = useState<Siswa[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState<FormState>(EMPTY_FORM);
+
+  // 1. Fetch data dari API Backend MySQL
+  const loadStudents = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await studentService.getAll();
+      setSiswaList(data);
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || 'Gagal memuat data siswa dari server');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStudents();
+  }, [loadStudents]);
 
   const openCreate = () => {
     setEditingId(null);
@@ -82,51 +86,71 @@ export const SiswaModule: React.FC = () => {
     setShowModal(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // 2. Submit Create & Edit ke Database
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitting(true);
 
-    if (editingId) {
-      setSiswaList((prev) =>
-        prev.map((s) =>
-          s.id === editingId
-            ? {
-                ...s,
-                nama: formData.nama,
-                nik: formData.nik,
-                sekolahAsal: formData.sekolahAsal,
-                status: formData.status,
-                pasporUploaded: formData.paspor ? true : s.pasporUploaded,
-                ijazahUploaded: formData.ijazah ? true : s.ijazahUploaded,
-              }
-            : s
-        )
-      );
-      toast.success(`Data siswa ${formData.nama} berhasil diperbarui`);
-    } else {
-      const newSiswa: Siswa = {
-        id: String(Date.now()),
-        nama: formData.nama,
-        nik: formData.nik,
-        sekolahAsal: formData.sekolahAsal,
-        lpkPenyangga: user?.penyanggaName || 'LPK SO PRODIGI',
-        status: formData.status,
-        pasporUploaded: !!formData.paspor,
-        ijazahUploaded: !!formData.ijazah,
-      };
-      setSiswaList((prev) => [newSiswa, ...prev]);
-      toast.success(`Data siswa ${newSiswa.nama} berhasil disimpan`);
+    try {
+      if (editingId) {
+        // Mode UPDATE
+        const res = await studentService.update(editingId, {
+          namaLengkap: formData.nama,
+          sekolahAsal: formData.sekolahAsal,
+          status: formData.status,
+        });
+
+        if (res.success) {
+          toast.success(`Data siswa ${formData.nama} berhasil diperbarui`);
+          await loadStudents(); // Re-fetch data terbaru
+          setShowModal(false);
+        } else {
+          toast.error(res.error || 'Gagal memperbarui data');
+        }
+      } else {
+        // Mode CREATE
+        const res = await studentService.create({
+          namaLengkap: formData.nama,
+          nik: formData.nik,
+          sekolahAsal: formData.sekolahAsal,
+          status: formData.status,
+          lpkPenyanggaId: user?.id,
+        });
+
+        if (res.success) {
+          toast.success(`Data siswa ${formData.nama} berhasil disimpan ke database`);
+          await loadStudents(); // Re-fetch data terbaru
+          setShowModal(false);
+        } else {
+          toast.error(res.error || 'Gagal menyimpan data');
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      toast.error('Terjadi kesalahan koneksi ke server Express');
+    } finally {
+      setSubmitting(false);
     }
-
-    setShowModal(false);
-    setEditingId(null);
-    setFormData(EMPTY_FORM);
   };
 
-  const confirmDelete = () => {
+  // 3. Confirm Delete ke Database
+  const confirmDelete = async () => {
     if (!deleteTarget) return;
-    setSiswaList((prev) => prev.filter((s) => s.id !== deleteTarget.id));
-    toast.success(`Data siswa ${deleteTarget.nama} dihapus`);
-    setDeleteTarget(null);
+
+    try {
+      const res = await studentService.delete(deleteTarget.id);
+      if (res.success) {
+        toast.success(`Data siswa ${deleteTarget.nama} berhasil dihapus`);
+        await loadStudents();
+      } else {
+        toast.error(res.error || 'Gagal menghapus data');
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error('Gagal menghapus data siswa dari database');
+    } finally {
+      setDeleteTarget(null);
+    }
   };
 
   const filteredSiswa = siswaList.filter((s) => {
@@ -171,7 +195,7 @@ export const SiswaModule: React.FC = () => {
         ).map((chip) => (
           <button
             key={chip.label}
-            onClick={() => setStatusFilter(statusFilter === chip.label ? 'Semua' : chip.label as Siswa['status'])}
+            onClick={() => setStatusFilter(statusFilter === chip.label ? 'Semua' : (chip.label as Siswa['status']))}
             className={`flex items-center justify-between gap-2 bg-white rounded-xl border px-4 py-3.5 transition-all ${
               statusFilter === chip.label
                 ? 'border-brand-600 ring-2 ring-brand-600/15 shadow-card'
@@ -216,57 +240,67 @@ export const SiswaModule: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
-              {filteredSiswa.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-50/60 transition">
-                  <td className="p-4">
-                    <p className="font-semibold text-slate-800">{s.nama}</p>
-                    <p className="text-xs text-slate-400">NIK: {s.nik}</p>
-                  </td>
-                  <td className="p-4">{s.sekolahAsal}</td>
-                  <td className="p-4">
-                    <span className="px-2 py-1 text-xs bg-slate-100 rounded text-slate-700 font-medium">
-                      {s.lpkPenyangga}
-                    </span>
-                  </td>
-                  <td className="p-4">
-                    <div className="flex items-center gap-3">
-                      <span className={`flex items-center gap-1 text-xs ${s.pasporUploaded ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
-                        {s.pasporUploaded ? <CheckCircle size={14} /> : <Clock size={14} />} Paspor
-                      </span>
-                      <span className={`flex items-center gap-1 text-xs ${s.ijazahUploaded ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
-                        {s.ijazahUploaded ? <CheckCircle size={14} /> : <Clock size={14} />} Ijazah
-                      </span>
-                    </div>
-                  </td>
-                  <td className="p-4">
-                    <Badge tone={STATUS_TONE[s.status]}>{s.status}</Badge>
-                  </td>
-                  <td className="p-4">
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => openEdit(s)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition"
-                        aria-label={`Edit ${s.nama}`}
-                      >
-                        <Pencil size={15} />
-                      </button>
-                      <button
-                        onClick={() => setDeleteTarget(s)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
-                        aria-label={`Hapus ${s.nama}`}
-                      >
-                        <Trash2 size={15} />
-                      </button>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center text-sm text-slate-400">
+                    <div className="flex items-center justify-center gap-2">
+                      <Loader2 size={18} className="animate-spin text-brand-600" />
+                      Memuat data dari database MySQL...
                     </div>
                   </td>
                 </tr>
-              ))}
-              {filteredSiswa.length === 0 && (
+              ) : filteredSiswa.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="p-8 text-center text-sm text-slate-400">
                     Tidak ada data siswa yang cocok.
                   </td>
                 </tr>
+              ) : (
+                filteredSiswa.map((s) => (
+                  <tr key={s.id} className="hover:bg-slate-50/60 transition">
+                    <td className="p-4">
+                      <p className="font-semibold text-slate-800">{s.nama}</p>
+                      <p className="text-xs text-slate-400">NIK: {s.nik}</p>
+                    </td>
+                    <td className="p-4">{s.sekolahAsal}</td>
+                    <td className="p-4">
+                      <span className="px-2 py-1 text-xs bg-slate-100 rounded text-slate-700 font-medium">
+                        {s.lpkPenyangga}
+                      </span>
+                    </td>
+                    <td className="p-4">
+                      <div className="flex items-center gap-3">
+                        <span className={`flex items-center gap-1 text-xs ${s.pasporUploaded ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
+                          {s.pasporUploaded ? <CheckCircle size={14} /> : <Clock size={14} />} Paspor
+                        </span>
+                        <span className={`flex items-center gap-1 text-xs ${s.ijazahUploaded ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
+                          {s.ijazahUploaded ? <CheckCircle size={14} /> : <Clock size={14} />} Ijazah
+                        </span>
+                      </div>
+                    </td>
+                    <td className="p-4">
+                      <Badge tone={STATUS_TONE[s.status]}>{s.status}</Badge>
+                    </td>
+                    <td className="p-4">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => openEdit(s)}
+                          className="p-2 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition"
+                          aria-label={`Edit ${s.nama}`}
+                        >
+                          <Pencil size={15} />
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget(s)}
+                          className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
+                          aria-label={`Hapus ${s.nama}`}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
@@ -277,8 +311,10 @@ export const SiswaModule: React.FC = () => {
       <Modal
         open={showModal}
         onClose={() => {
-          setShowModal(false);
-          setEditingId(null);
+          if (!submitting) {
+            setShowModal(false);
+            setEditingId(null);
+          }
         }}
         title={editingId ? 'Edit Data Siswa' : 'Tambah Data Siswa Baru'}
         maxWidthClass="max-w-lg"
@@ -293,6 +329,7 @@ export const SiswaModule: React.FC = () => {
               onChange={(e) => setFormData({ ...formData, nama: e.target.value })}
               className="w-full text-sm border border-slate-300 p-2.5 rounded-lg outline-brand-500"
               placeholder="Masukkan nama lengkap"
+              disabled={submitting}
             />
           </div>
 
@@ -302,9 +339,10 @@ export const SiswaModule: React.FC = () => {
               <input
                 type="text"
                 required
+                disabled={Boolean(editingId) || submitting}
                 value={formData.nik}
                 onChange={(e) => setFormData({ ...formData, nik: e.target.value })}
-                className="w-full text-sm border border-slate-300 p-2.5 rounded-lg outline-brand-500"
+                className="w-full text-sm border border-slate-300 p-2.5 rounded-lg outline-brand-500 disabled:bg-slate-100"
                 placeholder="16 digit NIK"
               />
             </div>
@@ -313,6 +351,7 @@ export const SiswaModule: React.FC = () => {
               <input
                 type="text"
                 required
+                disabled={submitting}
                 value={formData.sekolahAsal}
                 onChange={(e) => setFormData({ ...formData, sekolahAsal: e.target.value })}
                 className="w-full text-sm border border-slate-300 p-2.5 rounded-lg outline-brand-500"
@@ -325,6 +364,7 @@ export const SiswaModule: React.FC = () => {
             <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
             <select
               value={formData.status}
+              disabled={submitting}
               onChange={(e) => setFormData({ ...formData, status: e.target.value as Siswa['status'] })}
               className="w-full text-sm border border-slate-300 p-2.5 rounded-lg outline-brand-500 bg-white"
             >
@@ -372,6 +412,7 @@ export const SiswaModule: React.FC = () => {
           <div className="flex justify-end gap-2 pt-4 border-t">
             <button
               type="button"
+              disabled={submitting}
               onClick={() => {
                 setShowModal(false);
                 setEditingId(null);
@@ -382,8 +423,10 @@ export const SiswaModule: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="px-4 py-2 text-sm font-medium bg-brand-600 hover:bg-brand-500 text-white rounded-lg shadow-sm transition"
+              disabled={submitting}
+              className="px-4 py-2 text-sm font-medium bg-brand-600 hover:bg-brand-500 text-white rounded-lg shadow-sm transition inline-flex items-center gap-2"
             >
+              {submitting && <Loader2 size={16} className="animate-spin" />}
               {editingId ? 'Simpan Perubahan' : 'Simpan Data Siswa'}
             </button>
           </div>
