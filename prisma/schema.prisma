@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum Role {
+  pusat
+  marketing
+  lpk_penyangga
+}
+
+enum StatusSiswa {
+  Pendaftaran
+  Pelatihan
+  Matching
+  Berangkat
+}
+
+model User {
+  id                   String               @id @default(uuid())
+  name                 String
+  email                String               @unique
+  password             String
+  role                 Role                 @default(pusat)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  lpkPenyanggaProfile  LpkPenyanggaProfile?
+}
+
+model LpkPenyanggaProfile {
+  id               String    @id @default(uuid())
+  userId           String    @unique
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  namaLpk          String
+  penanggungJawab  String
+  wilayah          String
+  createdAt        DateTime  @default(now())
+  students         Student[]
+}
+
+model Student {
+  id                String              @id @default(uuid())
+  lpkPenyanggaId    String
+  lpkPenyangga      LpkPenyanggaProfile @relation(fields: [lpkPenyanggaId], references: [id], onDelete: Cascade)
+  namaLengkap       String
+  nik               String              @unique
+  sekolahAsal       String
+
+  // Dokumen Persyaratan
+  pasporPath        String?
+  ijazahPath        String?
+  kkPath            String?
+  ktpPath           String?
+  pasPhotoPath      String?
+  aktaPath          String?
+  cvPath            String?
+
+  status            StatusSiswa         @default(Pendaftaran)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+}
